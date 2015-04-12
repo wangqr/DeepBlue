@@ -10,8 +10,10 @@
 #include<time.h>
 #include<signal.h>
 #include<limits.h>
+// TODO use multi-thread to speed up
+//#include<pthread.h>
 
-#define AI_VERSOIN "wangqr_0.0.1.1003"
+#define AI_VERSION "wangqr_0.0.1.1004"
 
 using namespace teamstyle16;
 using std::vector;
@@ -30,7 +32,7 @@ inline int Distance(Position pos1,Position pos2)				{return abs(pos1.x-pos2.x)+a
 inline int max(const int& x, const int& y)					{return x>y?x:y;}
 inline int min(const int& x, const int& y)					{return x<y?x:y;}
 inline bool PxyEq(const Position& a,const Position& b)		{return a.x==b.x && a.y==b.y;}
-const char * GetTeamName()									{return AI_VERSOIN;}
+const char * GetTeamName()									{return AI_VERSION;}
 inline bool InSight (const State& a, Position pos)			{return Distance(a.pos,pos)<=kProperty[a.type].sight_ranges[pos.z]+INFO->weather;}
 inline bool InSight (Position pos)							{for(int i=0;i<INFO->element_num;++i){const State& a=*INFO->elements[i];if(a.team != INFO->team_num) continue;if(InSight(a,pos))return true;}return false;}
 inline bool InFireRange(const State& a, Position pos)		{return Distance(a.pos,pos)<=kProperty[a.type].fire_ranges[pos.z];}
@@ -39,18 +41,71 @@ inline bool InMap(Position pos)								{return InMap(pos.x,pos.y);}
 Position operator+ (const Position& a, const Position& b)	{Position temp;temp.x=a.x+b.x;temp.y=a.y+b.y;temp.z=-1;return temp;}
 Position operator- (const Position& a, const Position& b)	{Position temp;temp.x=a.x-b.x;temp.y=a.y-b.y;temp.z=-1;return temp;}
 struct PosComp												{bool operator() (const Position& a, const Position& b)	{return a.x<b.x ||(a.x==b.x && (a.y<b.y || (a.y==b.y && a.z<b.z)));}};
-struct Unit;map<int,Unit*> Units; // [IMPORTANT] All data is here.
-//fake consts
-int my_team;
 const Position nei[4]={{1,0,-1},{-1,0,-1},{0,1,-1},{0,-1,-1}};
-map<Position,int,PosComp> metalPos;
-map<Position,int,PosComp> fuelPos;
-
 struct ExtMapType
 {
 	MapType map_type;
 };
 vector<vector<ExtMapType> > MapInfo;
+
+struct Unit;map<int,Unit*> Units; // [IMPORTANT] All data is here.
+
+int RouteDis(Position pos1, Position pos2) // [BFS] find distance via ocean
+{
+	if(pos1.x==pos2.x && pos1.y==pos2.y)return 0;
+	queue<pair<int,int> >bfs;
+	vector<vector<int> > vis;
+	vis.resize(INFO->x_max);
+	for(int i=0;i<INFO->x_max;++i)
+	{
+		vis[i].resize(INFO->y_max,0);
+	}
+	vis[pos1.x][pos1.y]=1;
+	bfs.push(make_pair(pos1.x,pos1.y));
+	vis[pos2.x][pos2.y]=-1;
+	bfs.push(make_pair(pos2.x,pos2.y));
+	while(!bfs.empty())
+	{
+		int x=bfs.front().first,y=bfs.front().second,z=vis[x][y];
+		bfs.pop();
+		for (int i=0;i<4;++i){
+			int p=x+nei[i].x,q=y+nei[i].y;
+			if(InMap(p,q) && vis[p][q]*z<0){
+				p=vis[p][q];
+				for(int i=0;i<INFO->x_max;++i)
+				{
+					for(int j=0;j<INFO->y_max;++j)
+					{
+						vis[i][j]=0;
+					}
+				}
+				return abs(z)+abs(p)-1;
+			}
+			else if(InMap(p,q) && vis[p][q]==0 && MapInfo[p][q].map_type==OCEAN )
+			{
+				vis[p][q]=z>0?z+1:z-1;
+				bfs.push(make_pair(p,q));
+			}
+		}
+	}
+	return -1;
+}
+
+int my_team;
+map<Position,int,PosComp> metalPos;
+map<Position,int,PosComp> fuelPos;
+
+/*
+Position FindMetalPos(Position pos){
+
+for(map<Position,int,PosComp>::iterator i=metalPos.begin();i!=metalPos.end();++i){
+
+}
+// TODO complete this
+}
+*/
+
+
 int start=0;
 
 enum UnitSignal
@@ -280,7 +335,7 @@ Base* enemy_base;
 inline bool HasSig(const Unit& a,const UnitSignal& b){return a.sig.find(b)!=a.sig.end();}
 
 void update(){
-
+	TryUpdate();
 	GSig.clear();
 	if(start==0){ // Run once
 		start=1;
@@ -295,7 +350,7 @@ void update(){
 			}
 		}
 	}
-	
+
 	for(int i=0;i<INFO->element_num;++i){
 		const State* j=INFO->elements[i];
 		map<int,Unit*>::iterator t=Units.find(j->index);
@@ -363,7 +418,7 @@ void update(){
 		}
 	}
 
-	
+
 }
 
 void AIMain()
@@ -372,19 +427,19 @@ void AIMain()
 
 	/*
 	{
-		int c=0;
-		for(map<int,Unit*>::iterator i=Units.begin();i!=Units.end();++i){
-			if(i->second->team==my_team && i->second->type==CARGO)
-				++c;
-		}
-		for(int i=0;i<INFO->production_num;++i){
-			if(INFO->production_list[i].unit_type==CARGO)
-				++c;
-		}
-		while(c<3){
-			Produce(CARGO);
-			++c;
-		}
+	int c=0;
+	for(map<int,Unit*>::iterator i=Units.begin();i!=Units.end();++i){
+	if(i->second->team==my_team && i->second->type==CARGO)
+	++c;
+	}
+	for(int i=0;i<INFO->production_num;++i){
+	if(INFO->production_list[i].unit_type==CARGO)
+	++c;
+	}
+	while(c<3){
+	Produce(CARGO);
+	++c;
+	}
 	}
 	*/ 
 	// TODO complete this
@@ -396,9 +451,20 @@ void AIMain()
 	// 
 	// 
 
-	for(int i=0;i<my_base->metal/kProperty[FIGHTER].cost;++i){
-		Produce(FIGHTER);
+	int j=my_base->fuel;
+	for(int i=0;i<INFO->production_num;++i){
+		j-=(kProperty[INFO->production_list[i].unit_type].fuel_max
+			-((INFO->production_list[i].unit_type==FIGHTER ||
+			INFO->production_list[i].unit_type==SCOUT)?1:0));
 	}
+
+	printf("%d\n",min(my_base->metal/kProperty[FIGHTER].cost,
+		j/(kProperty[FIGHTER].fuel_max-1)));
+	for(int i=0;i<min(my_base->metal/kProperty[FIGHTER].cost,
+		j/(kProperty[FIGHTER].fuel_max-1));++i){
+			Produce(FIGHTER);
+	}
+
 
 	for(map<int,Unit*>::iterator i=Units.begin();i!=Units.end();++i){
 		Unit& obj=*(i->second);
