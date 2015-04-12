@@ -11,7 +11,7 @@
 #include<signal.h>
 #include<limits.h>
 
-#define AI_VERSOIN "wangqr_0.0.1.1002"
+#define AI_VERSOIN "wangqr_0.0.1.1003"
 
 using namespace teamstyle16;
 using std::vector;
@@ -26,38 +26,31 @@ using std::set;
 using std::make_pair;
 
 const GameInfo *INFO = Info();
-inline int Distance(Position pos1,Position pos2)			{return abs(pos1.x-pos2.x)+abs(pos1.y-pos2.y);}
-inline int max(const int& x, const int& y)				{return x>y?x:y;}
-inline int min(const int& x, const int& y)				{return x<y?x:y;}
-inline bool PxyEq(const Position& a,const Position& b)	{return a.x==b.x && a.y==b.y;}
-const char * GetTeamName()								{return AI_VERSOIN;}
-inline bool InSight (const State& a, Position pos)		{return Distance(a.pos,pos)<=kProperty[a.type].sight_ranges[pos.z]+INFO->weather;}
-inline bool InSight (Position pos)						{for(int i=0;i<INFO->element_num;++i){const State& a=*INFO->elements[i];if(a.team != INFO->team_num) continue;if(InSight(a,pos))return true;}return false;}
-inline bool InFireRange(const State& a, Position pos)	{return Distance(a.pos,pos)<=kProperty[a.type].fire_ranges[pos.z];}
-inline bool InMap(int x,int y)							{return 0<=x && x<INFO->x_max && 0<=y && y<INFO->y_max;}
-inline bool InMap(Position pos)							{return InMap(pos.x,pos.y);}
-
-Position operator+ (const Position& a, const Position& b){
-	Position temp;
-	temp.x=a.x+b.x;
-	temp.y=a.y+b.y;
-	temp.z=-1;
-	return temp;
-}
-Position operator- (const Position& a, const Position& b){
-	Position temp;
-	temp.x=a.x-b.x;
-	temp.y=a.y-b.y;
-	temp.z=-1;
-	return temp;
-}
-struct Unit;
-map<int,Unit*> Units; // [IMPORTANT] All data is here.
+inline int Distance(Position pos1,Position pos2)				{return abs(pos1.x-pos2.x)+abs(pos1.y-pos2.y);}
+inline int max(const int& x, const int& y)					{return x>y?x:y;}
+inline int min(const int& x, const int& y)					{return x<y?x:y;}
+inline bool PxyEq(const Position& a,const Position& b)		{return a.x==b.x && a.y==b.y;}
+const char * GetTeamName()									{return AI_VERSOIN;}
+inline bool InSight (const State& a, Position pos)			{return Distance(a.pos,pos)<=kProperty[a.type].sight_ranges[pos.z]+INFO->weather;}
+inline bool InSight (Position pos)							{for(int i=0;i<INFO->element_num;++i){const State& a=*INFO->elements[i];if(a.team != INFO->team_num) continue;if(InSight(a,pos))return true;}return false;}
+inline bool InFireRange(const State& a, Position pos)		{return Distance(a.pos,pos)<=kProperty[a.type].fire_ranges[pos.z];}
+inline bool InMap(int x,int y)								{return 0<=x && x<INFO->x_max && 0<=y && y<INFO->y_max;}
+inline bool InMap(Position pos)								{return InMap(pos.x,pos.y);}
+Position operator+ (const Position& a, const Position& b)	{Position temp;temp.x=a.x+b.x;temp.y=a.y+b.y;temp.z=-1;return temp;}
+Position operator- (const Position& a, const Position& b)	{Position temp;temp.x=a.x-b.x;temp.y=a.y-b.y;temp.z=-1;return temp;}
+struct PosComp												{bool operator() (const Position& a, const Position& b)	{return a.x<b.x ||(a.x==b.x && (a.y<b.y || (a.y==b.y && a.z<b.z)));}};
+struct Unit;map<int,Unit*> Units; // [IMPORTANT] All data is here.
 //fake consts
 int my_team;
 const Position nei[4]={{1,0,-1},{-1,0,-1},{0,1,-1},{0,-1,-1}};
-map<Position,int> metalPos;
-map<Position,int> fuelPos;
+map<Position,int,PosComp> metalPos;
+map<Position,int,PosComp> fuelPos;
+
+struct ExtMapType
+{
+	MapType map_type;
+};
+vector<vector<ExtMapType> > MapInfo;
 int start=0;
 
 enum UnitSignal
@@ -179,7 +172,7 @@ struct Base : public Building
 			rally_point[i]=n;
 		}
 	}
-	Position rally_point[kElementTypes];
+	Position rally_point[kElementTypes]; // FIXME no use
 
 };
 
@@ -203,14 +196,36 @@ struct Mine : public Resources
 		Resources::update_state(a);
 		if(visible && metal==0) run_out=true;
 		for(int i=1;i<4;++i){
-			// TODO complete this
+			Position a=pos+nei[i];
+			if(MapInfo[a.x][a.y].map_type==OCEAN){
+				if(run_out){
+					metalPos.erase(a);
+				}
+				else{
+					metalPos[a]=index;
+				}
+			}
 		}
 	}
 };
 
 struct OilField : public Resources
 {
-
+	void update_state(const State& a){
+		Resources::update_state(a);
+		if(visible && fuel==0) run_out=true;
+		for(int i=1;i<4;++i){
+			Position a=pos+nei[i];
+			if(MapInfo[a.x][a.y].map_type==OCEAN){
+				if(run_out){
+					metalPos.erase(a);
+				}
+				else{
+					metalPos[a]=index;
+				}
+			}
+		}
+	}
 };
 
 struct MovableUnit : public Unit
@@ -270,6 +285,15 @@ void update(){
 	if(start==0){ // Run once
 		start=1;
 		my_team=INFO->team_num;
+		MapInfo.resize(INFO->x_max);
+		for(int i=0;i<INFO->x_max;++i)
+		{
+			MapInfo[i].resize(INFO->y_max);
+			for(int j=0;j<INFO->y_max;++j)
+			{
+				MapInfo[i][j].map_type=Map(i,j);
+			}
+		}
 	}
 	
 	for(int i=0;i<INFO->element_num;++i){
@@ -366,11 +390,11 @@ void AIMain()
 	// TODO complete this
 
 
-	// MAIN AI PART BEGIN
-	// MAIN AI PART BEGIN
-	// MAIN AI PART BEGIN
-	// MAIN AI PART BEGIN
-	// MAIN AI PART BEGIN
+	// 
+	// 
+	// ==========[MAIN AI PART BEGIN]==========
+	// 
+	// 
 
 	for(int i=0;i<my_base->metal/kProperty[FIGHTER].cost;++i){
 		Produce(FIGHTER);
@@ -393,11 +417,11 @@ void AIMain()
 			obj.job.push_back(a);
 		}
 	}
-	//MAIN AI PART END
-	//MAIN AI PART END
-	//MAIN AI PART END
-	//MAIN AI PART END
-	//MAIN AI PART END
+	//
+	//
+	// ==========[MAIN AI PART END]==========
+	//
+	//
 
 	for(map<int,Unit*>::iterator i=Units.begin();i!=Units.end();++i){
 		if(i->second->team==my_team)
