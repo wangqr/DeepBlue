@@ -15,7 +15,7 @@
 // TODO use multi-thread to speed up
 //#include<pthread.h>
 
-#define AI_VERSION "wangqr_0.0.1.1005"
+#define AI_VERSION "wangqr_0.0.2.1005"
 
 using namespace teamstyle16;
 using std::vector;
