@@ -1,4 +1,8 @@
 #include "basic.h"
+#include<time.h>
+#include<signal.h>
+#include<limits.h>
+#include<stdio.h>
 #include<iostream>
 #include<cmath>
 #include<vector>
@@ -7,13 +11,11 @@
 #include<queue>
 #include<map>
 #include<set>
-#include<time.h>
-#include<signal.h>
-#include<limits.h>
+
 // TODO use multi-thread to speed up
 //#include<pthread.h>
 
-#define AI_VERSION "wangqr_0.0.1.1004"
+#define AI_VERSION "wangqr_0.0.1.1005"
 
 using namespace teamstyle16;
 using std::vector;
@@ -41,7 +43,8 @@ inline bool InMap(Position pos)								{return InMap(pos.x,pos.y);}
 Position operator+ (const Position& a, const Position& b)	{Position temp;temp.x=a.x+b.x;temp.y=a.y+b.y;temp.z=-1;return temp;}
 Position operator- (const Position& a, const Position& b)	{Position temp;temp.x=a.x-b.x;temp.y=a.y-b.y;temp.z=-1;return temp;}
 struct PosComp												{bool operator() (const Position& a, const Position& b)	{return a.x<b.x ||(a.x==b.x && (a.y<b.y || (a.y==b.y && a.z<b.z)));}};
-const Position nei[4]={{1,0,-1},{-1,0,-1},{0,1,-1},{0,-1,-1}};
+const Position neighbour[4]={{1,0,-1},{-1,0,-1},{0,1,-1},{0,-1,-1}};
+const Position baseNeighbour[12]={{2,0,-1},{2,1,-1},{2,-1,-1},{-2,0,-1},{-2,1,-1},{-2,-1,-1},{0,2,-1},{1,2,-1},{-1,2,-1},{0,-2,-1},{1,-2,-1},{-1,-2,-1}};
 struct ExtMapType
 {
 	MapType map_type;
@@ -69,7 +72,7 @@ int RouteDis(Position pos1, Position pos2) // [BFS] find distance via ocean
 		int x=bfs.front().first,y=bfs.front().second,z=vis[x][y];
 		bfs.pop();
 		for (int i=0;i<4;++i){
-			int p=x+nei[i].x,q=y+nei[i].y;
+			int p=x+neighbour[i].x,q=y+neighbour[i].y;
 			if(InMap(p,q) && vis[p][q]*z<0){
 				p=vis[p][q];
 				for(int i=0;i<INFO->x_max;++i)
@@ -94,17 +97,50 @@ int RouteDis(Position pos1, Position pos2) // [BFS] find distance via ocean
 int my_team;
 map<Position,int,PosComp> metalPos;
 map<Position,int,PosComp> fuelPos;
+set<Position,PosComp> oceanNearMyBase;
 
-/*
 Position FindMetalPos(Position pos){
-
-for(map<Position,int,PosComp>::iterator i=metalPos.begin();i!=metalPos.end();++i){
-
+	Position a={0,0,-1};
+	if(metalPos.empty())return a;
+	a=metalPos.begin()->first;
+	int dis=RouteDis(pos,a);
+	for(map<Position,int,PosComp>::iterator i=metalPos.begin();i!=metalPos.end();++i){
+		int t=RouteDis(pos,i->first);
+		if(t<dis){
+			a=i->first;
+			dis=t;
+		}
+	}
+	return a;
 }
-// TODO complete this
-}
-*/
 
+Position FindFuelPos(Position pos){
+	Position a={0,0,-1};
+	if(fuelPos.empty())return a;
+	a=fuelPos.begin()->first;
+	int dis=RouteDis(pos,a);
+	for(map<Position,int,PosComp>::iterator i=fuelPos.begin();i!=fuelPos.end();++i){
+		int t=RouteDis(pos,i->first);
+		if(t<dis){
+			a=i->first;
+			dis=t;
+		}
+	}
+	return a;
+}
+
+Position FindWayHome(Position pos){
+	Position a=*oceanNearMyBase.begin();
+	int dis=RouteDis(pos,a);
+	for(set<Position,PosComp>::iterator i=oceanNearMyBase.begin();i!=oceanNearMyBase.end();++i){
+		int t=RouteDis(pos,*i);
+		if(t<dis){
+			a=*i;
+			dis=t;
+		}
+	}
+	return a;
+}
 
 int start=0;
 
@@ -135,7 +171,7 @@ inline void erase_gsig(GlobalSignal a){GSig.erase(a);}
 struct Unit : public State
 {
 	set<UnitSignal> sig;
-	vector<Job> job;
+	queue<Job> job;
 	int last_seen;
 	virtual void sig_add(UnitSignal a){sig.insert(a);}
 	virtual void sig_remove(UnitSignal a){sig.erase(a);}
@@ -149,7 +185,6 @@ struct Unit : public State
 				if(InFireRange(*this,Units[a.target]->pos))
 					AttackUnit(index,a.target);
 			}
-
 		}
 	}
 	virtual bool movable(){return false;};
@@ -157,10 +192,6 @@ struct Unit : public State
 		index=a.index;
 		type=a.type;
 		pos=a.pos;
-		if(type==BASE){
-			++pos.x;
-			++pos.y;
-		}
 		team=a.team;
 		visible=a.visible;
 		health=a.health;
@@ -210,7 +241,7 @@ struct Unit : public State
 			}
 		}
 	}
-
+	virtual void simple_init(){}
 };
 
 struct Building : public Unit
@@ -230,6 +261,9 @@ struct Base : public Building
 	Position rally_point[kElementTypes]; // FIXME no use
 
 };
+
+Base* my_base;
+Base* enemy_base;
 
 struct Fort : public Building
 {
@@ -251,8 +285,8 @@ struct Mine : public Resources
 		Resources::update_state(a);
 		if(visible && metal==0) run_out=true;
 		for(int i=1;i<4;++i){
-			Position a=pos+nei[i];
-			if(MapInfo[a.x][a.y].map_type==OCEAN){
+			Position a=pos+neighbour[i];
+			if(InMap(a) && MapInfo[a.x][a.y].map_type==OCEAN){
 				if(run_out){
 					metalPos.erase(a);
 				}
@@ -270,13 +304,13 @@ struct OilField : public Resources
 		Resources::update_state(a);
 		if(visible && fuel==0) run_out=true;
 		for(int i=1;i<4;++i){
-			Position a=pos+nei[i];
+			Position a=pos+neighbour[i];
 			if(MapInfo[a.x][a.y].map_type==OCEAN){
 				if(run_out){
-					metalPos.erase(a);
+					fuelPos.erase(a);
 				}
 				else{
-					metalPos[a]=index;
+					fuelPos[a]=index;
 				}
 			}
 		}
@@ -310,7 +344,65 @@ struct Carrier : public Ship
 
 struct Cargo : public Ship
 {
-
+	void DoJob(){
+		if(!job.empty()){
+			Job a=job.front();
+			if(PxyEq(pos,a.pos)){
+				if(a.type==a.COLLECT){
+					if(Units[a.target]->type==OILFIELD){
+						if(my_base->metal<kProperty[BASE].metal_max){
+							a.pos=FindMetalPos(pos);
+							a.target=metalPos[a.pos];
+							job.pop();
+							job.push(a);
+						}
+						else{
+							a.type=a.SUPPLY;
+							a.pos=FindWayHome(pos);
+							a.target=my_base->index;
+							job.pop();
+							job.push(a);
+						}
+					}
+					else if(Units[a.target]->type==MINE){
+						a.type=a.SUPPLY;
+						a.pos=FindWayHome(pos);
+						a.target=my_base->index;
+						job.pop();
+						job.push(a);
+					}
+				}
+				else{ // FIXME jump some process
+					Position q=FindFuelPos(pos);
+					int fn=RouteDis(pos,q)+5;
+					//printf("    [DEBUG]  fn=%d, fuel=%d\n",fn,fuel);
+					Supply(index,my_base->index,fuel-fn,0,metal);
+					a.type=a.COLLECT;
+					a.pos=q;
+					a.target=fuelPos[q];
+					job.pop();
+					job.push(a);
+				}
+			}
+			a=job.front();
+			ChangeDest(index,a.pos);
+		}
+	}
+	void simple_init(){
+		Job a;
+		Position q=FindFuelPos(pos);
+		int fn=RouteDis(pos,q)+5;
+		if(fn<fuel){
+			Supply(index,my_base->index,fuel-fn,0,0);
+		}
+		else if(fn>fuel){
+			Supply(my_base->index,index,fn-fuel,0,0);
+		}
+		a.type=a.COLLECT;
+		a.pos=q;
+		a.target=fuelPos[q];
+		job.push(a);
+	}
 };
 
 struct AirForce : public MovableUnit
@@ -327,10 +419,6 @@ struct Scout : public AirForce
 {
 
 };
-
-
-Base* my_base;
-Base* enemy_base;
 
 inline bool HasSig(const Unit& a,const UnitSignal& b){return a.sig.find(b)!=a.sig.end();}
 
@@ -360,6 +448,11 @@ void update(){
 					my_base=new Base;
 					Units[j->index]=my_base;
 					my_base->InitState(*j);
+					for(int i=0;i<12;++i){
+						Position a=baseNeighbour[i]+my_base->pos;
+						if(InMap(a) && MapInfo[a.x][a.y].map_type==OCEAN)
+							oceanNearMyBase.insert(a);
+					}
 				}
 				else{
 					enemy_base=new Base;
@@ -425,31 +518,27 @@ void AIMain()
 {  
 	update();
 
-	/*
-	{
-	int c=0;
-	for(map<int,Unit*>::iterator i=Units.begin();i!=Units.end();++i){
-	if(i->second->team==my_team && i->second->type==CARGO)
-	++c;
-	}
-	for(int i=0;i<INFO->production_num;++i){
-	if(INFO->production_list[i].unit_type==CARGO)
-	++c;
-	}
-	while(c<3){
-	Produce(CARGO);
-	++c;
-	}
-	}
-	*/ 
-	// TODO complete this
-
-
 	// 
 	// 
 	// ==========[MAIN AI PART BEGIN]==========
 	// 
 	// 
+
+	{
+		int c=0;
+		for(map<int,Unit*>::iterator i=Units.begin();i!=Units.end();++i){
+			if(i->second->team==my_team && i->second->type==CARGO)
+				++c;
+		}
+		for(int i=0;i<INFO->production_num;++i){
+			if(INFO->production_list[i].unit_type==CARGO)
+				++c;
+		}
+		while(c<1){
+			Produce(CARGO);
+			++c;
+		}
+	}
 
 	int j=my_base->fuel;
 	for(int i=0;i<INFO->production_num;++i){
@@ -457,14 +546,10 @@ void AIMain()
 			-((INFO->production_list[i].unit_type==FIGHTER ||
 			INFO->production_list[i].unit_type==SCOUT)?1:0));
 	}
-
-	printf("%d\n",min(my_base->metal/kProperty[FIGHTER].cost,
-		j/(kProperty[FIGHTER].fuel_max-1)));
 	for(int i=0;i<min(my_base->metal/kProperty[FIGHTER].cost,
 		j/(kProperty[FIGHTER].fuel_max-1));++i){
 			Produce(FIGHTER);
 	}
-
 
 	for(map<int,Unit*>::iterator i=Units.begin();i!=Units.end();++i){
 		Unit& obj=*(i->second);
@@ -473,14 +558,10 @@ void AIMain()
 			a.type=a.ATTACK;
 			a.target=enemy_base->index;
 			a.pos=obj.pos+(enemy_base->pos-my_base->pos);
-			obj.job.push_back(a);
+			obj.job.push(a);
 		}
 		if(obj.type==CARGO && obj.job.empty()){
-			Job a;
-			a.type=a.COLLECT;
-			// TODO complete this
-			a.pos=obj.pos+(enemy_base->pos-my_base->pos);
-			obj.job.push_back(a);
+			obj.simple_init();
 		}
 	}
 	//
