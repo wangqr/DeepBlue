@@ -15,7 +15,7 @@
 // TODO use multi-thread to speed up
 //#include<pthread.h>
 
-#define AI_VERSION "wangqr_0.0.2.1005"
+#define AI_VERSION "wangqr_0.1-a1"
 
 using namespace teamstyle16;
 using std::vector;
@@ -52,6 +52,7 @@ struct ExtMapType
 vector<vector<ExtMapType> > MapInfo;
 
 struct Unit;map<int,Unit*> Units; // [IMPORTANT] All data is here.
+struct Base;Base* my_base;Base* enemy_base;
 
 int RouteDis(Position pos1, Position pos2) // [BFS] find distance via ocean
 {
@@ -259,11 +260,25 @@ struct Base : public Building
 		}
 	}
 	Position rally_point[kElementTypes]; // FIXME no use
-
+	void DoJob(){
+		if(job.empty()){
+			vector<int> enemy_in_sight;
+			for(int i=0;i<INFO->element_num;++i){
+				const State* j=INFO->elements[i];
+				if(InFireRange(*my_base,j->pos)){
+					enemy_in_sight.push_back(j->index);
+				}
+			}
+			if(!enemy_in_sight.empty()){
+				//TODO attack order
+				AttackUnit(my_base->index,enemy_in_sight.front());
+			}
+		}
+		else{
+			Building::DoJob();
+		}
+	}
 };
-
-Base* my_base;
-Base* enemy_base;
 
 struct Fort : public Building
 {
@@ -523,7 +538,12 @@ void AIMain()
 	// ==========[MAIN AI PART BEGIN]==========
 	// 
 	// 
-
+	int j=my_base->fuel;
+	for(int i=0;i<INFO->production_num;++i){
+		j-=(kProperty[INFO->production_list[i].unit_type].fuel_max
+			-((INFO->production_list[i].unit_type==FIGHTER ||
+			INFO->production_list[i].unit_type==SCOUT)?1:0)-((INFO->production_list[i].unit_type==CARGO)?150:0));
+	}
 	{
 		int c=0;
 		for(map<int,Unit*>::iterator i=Units.begin();i!=Units.end();++i){
@@ -534,18 +554,14 @@ void AIMain()
 			if(INFO->production_list[i].unit_type==CARGO)
 				++c;
 		}
-		while(c<1){
+		while(c<INFO->round/5+1){
 			Produce(CARGO);
 			++c;
+			j-=150;
 		}
 	}
-
-	int j=my_base->fuel;
-	for(int i=0;i<INFO->production_num;++i){
-		j-=(kProperty[INFO->production_list[i].unit_type].fuel_max
-			-((INFO->production_list[i].unit_type==FIGHTER ||
-			INFO->production_list[i].unit_type==SCOUT)?1:0));
-	}
+	
+	
 	for(int i=0;i<min(my_base->metal/kProperty[FIGHTER].cost,
 		j/(kProperty[FIGHTER].fuel_max-1));++i){
 			Produce(FIGHTER);
