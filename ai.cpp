@@ -560,8 +560,6 @@ void AIMain()
 			j-=150;
 		}
 	}
-	
-	
 	for(int i=0;i<min(my_base->metal/kProperty[FIGHTER].cost,
 		j/(kProperty[FIGHTER].fuel_max-1));++i){
 			Produce(FIGHTER);
@@ -576,7 +574,7 @@ void AIMain()
 			a.pos=obj.pos+(enemy_base->pos-my_base->pos);
 			obj.job.push(a);
 		}
-		if(obj.type==CARGO && obj.job.empty()){
+		else if(obj.type==CARGO && obj.job.empty()){
 			obj.simple_init();
 		}
 	}
