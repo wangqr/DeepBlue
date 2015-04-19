@@ -166,8 +166,8 @@ enum GlobalSignal
 };
 
 set<GlobalSignal> GSig;
-inline void raise_gsig(GlobalSignal a){GSig.insert(a);}
-inline void erase_gsig(GlobalSignal a){GSig.erase(a);}
+inline void RaiseGsig(GlobalSignal a){GSig.insert(a);}
+inline void EraseGsig(GlobalSignal a){GSig.erase(a);}
 
 struct Unit : public State
 {
@@ -202,7 +202,7 @@ struct Unit : public State
 		destination=a.destination;
 		last_seen=INFO->round;
 	}
-	virtual void update_state(const State& a){
+	virtual void UpdateState(const State& a){
 		//if(index!=a.index)return;
 		if(movable() && a.visible){
 			pos=a.pos;
@@ -220,7 +220,7 @@ struct Unit : public State
 				if(team==INFO->team_num){
 					if(health>a.health){
 						sig_add(UNDER_ATTACK);
-						raise_gsig(BASE_UNDER_ATTACT);
+						RaiseGsig(BASE_UNDER_ATTACT);
 					}
 					else{
 						sig_remove(UNDER_ATTACK);
@@ -242,7 +242,7 @@ struct Unit : public State
 			}
 		}
 	}
-	virtual void simple_init(){}
+	virtual void SimpleInit(){}
 };
 
 struct Building : public Unit
@@ -296,8 +296,8 @@ struct Resources : public Unit
 
 struct Mine : public Resources
 {
-	void update_state(const State& a){
-		Resources::update_state(a);
+	void UpdateState(const State& a){
+		Resources::UpdateState(a);
 		if(visible && metal==0) run_out=true;
 		for(int i=1;i<4;++i){
 			Position a=pos+neighbour[i];
@@ -315,8 +315,8 @@ struct Mine : public Resources
 
 struct OilField : public Resources
 {
-	void update_state(const State& a){
-		Resources::update_state(a);
+	void UpdateState(const State& a){
+		Resources::UpdateState(a);
 		if(visible && fuel==0) run_out=true;
 		for(int i=1;i<4;++i){
 			Position a=pos+neighbour[i];
@@ -403,7 +403,7 @@ struct Cargo : public Ship
 			ChangeDest(index,a.pos);
 		}
 	}
-	void simple_init(){
+	void SimpleInit(){
 		Job a;
 		Position q=FindFuelPos(pos);
 		int fn=RouteDis(pos,q)+5;
@@ -513,7 +513,7 @@ void update(){
 			}
 		}
 		else{
-			t->second->update_state(*j);
+			t->second->UpdateState(*j);
 		}
 	}
 
@@ -522,7 +522,7 @@ void update(){
 			delete i->second;
 			Units.erase(i);
 			i=Units.begin();
-			raise_gsig(UNIT_LOST);
+			RaiseGsig(UNIT_LOST);
 		}
 	}
 
@@ -575,7 +575,7 @@ void AIMain()
 			obj.job.push(a);
 		}
 		else if(obj.type==CARGO && obj.job.empty()){
-			obj.simple_init();
+			obj.SimpleInit();
 		}
 	}
 	//
