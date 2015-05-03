@@ -11,8 +11,9 @@
 #include<queue>
 #include<map>
 #include<set>
+#include<algorithm>
 
-#define AI_VERSION "v1.0"
+#define AI_VERSION "v1.9-a1"
 
 #define MAX_FIGHTER_WAITING 9
 
@@ -27,11 +28,13 @@ using std::pair;
 using std::map;
 using std::set;
 using std::make_pair;
+using std::sort;
+using std::min;
+using std::max;
+using std::min_element;
 
 const GameInfo *INFO = Info();
 inline int Distance(Position pos1,Position pos2)				{return abs(pos1.x-pos2.x)+abs(pos1.y-pos2.y);}
-inline int max(const int& x, const int& y)					{return x>y?x:y;}
-inline int min(const int& x, const int& y)					{return x<y?x:y;}
 inline bool PxyEq(const Position& a,const Position& b)		{return a.x==b.x && a.y==b.y;}
 const char * GetTeamName()									{return AI_VERSION;}
 inline bool InSight (const State& a, const Position pos)		{return Distance(a.pos,pos)<=kProperty[a.type].sight_ranges[pos.z]+INFO->weather;}
@@ -276,29 +279,32 @@ void Unit::DoJob(){
 			}
 		}
 		for(unsigned i=0;i<enemy_in_sight.size();++i){
-			if(Units[enemy_in_sight[i]]->health<=0) continue;
+			if(Units[enemy_in_sight[i]]->health<=0){
+				enemy_in_sight.erase(enemy_in_sight.begin()+i);
+				--i;
+				continue;
+			}
 			int t=GetDamage(*this,*Units[enemy_in_sight[i]]);
-			if(t>0){
-				AttackUnit(index,enemy_in_sight[i]);
-				Units[enemy_in_sight[i]]->health-=t;
-				break;
+			if(t<=0){
+				enemy_in_sight.erase(enemy_in_sight.begin()+i);
+				--i;
+				continue;
 			}
 		}
-		/*
-		else{
-			enemy_in_sight.clear();
-			for(int i=0;i<INFO->element_num;++i){
-				const State* j=INFO->elements[i];
-				if(j->team==2 && InFireRange(*this,*j)){
-					enemy_in_sight.push_back(j->index);
+		if(!enemy_in_sight.empty()){
+			struct
+			{
+				bool operator()(int a,int b){
+					if(Units[a]->health < Units[b]->health)
+						return true;
+					else
+						return false;
 				}
-			}
-			if(!enemy_in_sight.empty()){
-				// [TODO] attacking order
-				AttackUnit(index,enemy_in_sight.front());
-			}
+			} comp_obj;
+			int j=*min_element(enemy_in_sight.begin(),enemy_in_sight.end(),comp_obj);
+			AttackUnit(index,j);
+			Units[j]->health-=GetDamage(*this,*Units[j]);
 		}
-		*/
 	}
 }
 struct Fort : public Building
@@ -515,6 +521,10 @@ struct Cargo : public Ship
 	}
 	void SimpleInit(){
 		Job a;
+		a.pos=pos;
+		a.type=a.SUPPLY;
+		a.target=my_base->index;
+		/*
 		Position q=FindFuelPos(pos);
 		UsedPos p;
 		p.x=q.x;
@@ -536,6 +546,7 @@ struct Cargo : public Ship
 		a.type=a.COLLECT;
 		a.pos=q;
 		a.target=fuelPos[q];
+		*/
 		job.push(a);
 	}
 };
@@ -667,7 +678,7 @@ void AIMain()
 				INFO->production_list[i].unit_type==SCOUT)?1:0)-((INFO->production_list[i].unit_type==CARGO)?150:0));
 		}
 		{
-			int c=0;
+			unsigned c=0;
 			for(map<int,Unit*>::iterator i=Units.begin();i!=Units.end();++i){
 				if(i->second->team==my_team && i->second->type==CARGO)
 					++c;
@@ -676,7 +687,7 @@ void AIMain()
 				if(INFO->production_list[i].unit_type==CARGO)
 					++c;
 			}
-			while(j>=150 && c<min(3+INFO->round/5,oceanNearMyBase.size())){
+			while(j>=150 && c<min(unsigned(2+INFO->round/5),oceanNearMyBase.size())){
 				Produce(CARGO);
 				++c;
 				j-=150;
@@ -727,7 +738,7 @@ void AIMain()
 				INFO->production_list[i].unit_type==SCOUT)?1:0)-((INFO->production_list[i].unit_type==CARGO)?150:0));
 		}
 		{
-			int c=0;
+			unsigned c=0;
 			for(map<int,Unit*>::iterator i=Units.begin();i!=Units.end();++i){
 				if(i->second->team==my_team && i->second->type==CARGO)
 					++c;
@@ -736,7 +747,7 @@ void AIMain()
 				if(INFO->production_list[i].unit_type==CARGO)
 					++c;
 			}
-			while(j>=150 && c<min(INFO->round<=1?6:12,oceanNearMyBase.size())){
+			while(j>=150 && c<min(INFO->round<=1?6u:12u,oceanNearMyBase.size())){
 				Produce(CARGO);
 				++c;
 				j-=150;
@@ -796,13 +807,10 @@ void AIMain()
 
 /*
 
-处理伤害<0情形
-预估敌方生命值
 基地维修、补弹药
 初始运输船向基地补给
 初始运输船数量
 资源空时不造运输船/运输船停至对方基地
-
 
 临海的己方据点视为矿
 
