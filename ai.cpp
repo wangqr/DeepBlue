@@ -13,7 +13,7 @@
 #include<set>
 #include<algorithm>
 
-#define AI_VERSION "whatever_v1.9-a1"
+#define AI_VERSION "whatever_v2.0-rc1"
 
 using namespace teamstyle16;
 using std::vector;
@@ -961,7 +961,7 @@ void AIMain()
 					occupiedPos[pos]=obj.index;
 					ChangeDest(obj.index,pos);
 				}
-				if(obj.type==CARRIER && obj.job.empty()){
+				if(obj.type==CARRIER && DistanceToBase(my_base->pos,obj.pos)==1){
 					Position pos=GetFreePlaceNearBase(*my_base,2,true,SURFACE);
 					EraseOccupiedPos(obj.index);
 					occupiedPos[pos]=obj.index;
