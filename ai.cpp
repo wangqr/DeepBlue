@@ -98,10 +98,15 @@ int start=0;
 struct UsedPos : public Position
 {
 	int round;
-	int index;
 };
-struct UsedPosComp												{bool operator() (const UsedPos& a, const UsedPos& b)	{if(a.round<b.round)return true; return a.x<b.x ||(a.x==b.x && (a.y<b.y || (a.y==b.y && a.z<b.z)));}};
-set<UsedPos,UsedPosComp> usedPos;
+struct UsedPosComp
+{
+	bool operator() (const UsedPos& a, const UsedPos& b)	{
+		if(a.round<b.round)return true;
+		return a.x<b.x ||(a.x==b.x && (a.y<b.y || (a.y==b.y && a.z<b.z)));
+	}
+};
+map<UsedPos,int,UsedPosComp> usedPos;
 
 enum UnitSignal
 {
@@ -171,7 +176,8 @@ struct Unit : public State
 			p.y=pos.y;
 			p.z=pos.z;
 			p.round=INFO->round;
-			usedPos.insert(p);
+			printf("[DEBUG] used pos (%d,%d,%d,%d)\n",p.x,p.y,p.z,p.round);
+			usedPos[p]=index;
 		}
 		else if(type==BASE){
 			if(team==INFO->team_num){
@@ -330,11 +336,14 @@ Position FindMetalPos(Position pos){
 	int dis=RouteDis(pos,a);
 	for(map<Position,int,PosComp>::iterator i=metalPos.begin();i!=metalPos.end();++i){
 		int t=RouteDis(pos,i->first);
-		q.x=pos.x;
-		q.y=pos.y;
-		q.z=pos.z;
+		q.x=i->first.x;
+		q.y=i->first.y;
+		q.z=i->first.z;
 		q.round=INFO->round+(t-1)/kProperty[CARGO].speed;
-		if(usedPos.find(q)!=usedPos.end())continue;
+		if(usedPos.find(q)!=usedPos.end()){
+			printf("[DEBUG] find pos used by metal (%d,%d,%d)\n",q.x,q.y,q.z);
+			continue;
+		}
 		if(t<dis){
 			a=i->first;
 			dis=t;
@@ -355,7 +364,10 @@ Position FindFuelPos(Position pos){
 		q.y=i->first.y;
 		q.z=i->first.z;
 		q.round=INFO->round+(t-1)/kProperty[CARGO].speed;
-		if(usedPos.find(q)!=usedPos.end())continue;
+		if(usedPos.find(q)!=usedPos.end()){
+			printf("[DEBUG] find pos used by fuel (%d,%d,%d)\n",q.x,q.y,q.z);
+			continue;
+		}
 		if(t<dis){
 			a=i->first;
 			dis=t;
@@ -374,7 +386,10 @@ Position FindWayHome(Position pos){
 		q.y=i->y;
 		q.z=i->z;
 		q.round=INFO->round+(t-1)/kProperty[CARGO].speed;
-		if(usedPos.find(q)!=usedPos.end())continue;
+		if(usedPos.find(q)!=usedPos.end()){
+			printf("[DEBUG] find home pos used (%d,%d,%d)\n",q.x,q.y,q.z);
+			continue;
+		}
 		if(t<dis){
 			a=*i;
 			dis=t;
@@ -447,7 +462,7 @@ struct Cargo : public Ship
 				}
 				else{ // [FIXME] jump some process
 					Position q=FindFuelPos(pos);
-					int fn=RouteDis(pos,q)+5;
+					int fn=RouteDis(pos,q)+10;
 					Supply(index,my_base->index,fuel-fn,0,metal);
 					a.type=a.COLLECT;
 					a.pos=q;
@@ -458,23 +473,34 @@ struct Cargo : public Ship
 			}
 			a=job.front();
 			ChangeDest(index,a.pos);
-			for(set<UsedPos,UsedPosComp>::iterator i=usedPos.begin();i!=usedPos.end();++i){
-				if(i->index==index)usedPos.erase(i);
+			for(map<UsedPos,int,UsedPosComp>::iterator i=usedPos.begin();i!=usedPos.end();++i){
+				if(i->second==index)usedPos.erase(i);
 			}
 			UsedPos q;
 			q.x=a.pos.x;
 			q.y=a.pos.y;
 			q.z=a.pos.z;
-			q.index=index;
 			q.round=INFO->round+(RouteDis(pos,a.pos)-1)/kProperty[CARGO].speed;
-			usedPos.insert(q);
+			printf("[DEBUG] used pos (%d,%d,%d,%d)\n",q.x,q.y,q.z,q.round);
+			usedPos[q]=index;
 			++q.round;
-			usedPos.insert(q);
+			printf("[DEBUG] used pos (%d,%d,%d,%d)\n",q.x,q.y,q.z,q.round);
+			usedPos[q]=index;
 		}
 	}
 	void SimpleInit(){
 		Job a;
 		Position q=FindFuelPos(pos);
+		UsedPos p;
+		p.x=q.x;
+		p.y=q.y;
+		p.z=q.z;
+		p.round=INFO->round+(RouteDis(pos,q)-1)/kProperty[CARGO].speed;
+		printf("[DEBUG] used pos (%d,%d,%d,%d)\n",p.x,p.y,p.z,p.round);
+		usedPos[p]=index;
+		++p.round;
+		printf("[DEBUG] used pos (%d,%d,%d,%d)\n",p.x,p.y,p.z,p.round);
+		usedPos[p]=index;
 		int fn=RouteDis(pos,q)+5;
 		if(fn<fuel){
 			Supply(index,my_base->index,fuel-fn,0,0);
@@ -508,7 +534,7 @@ struct Scout : public AirForce
 
 void update(){
 	TryUpdate();
-	while(!usedPos.empty() && usedPos.begin()->round<INFO->round) usedPos.erase(usedPos.begin());
+	while(!usedPos.empty() && usedPos.begin()->first.round<INFO->round) usedPos.erase(usedPos.begin());
 	GSig.clear();
 	if(start==0){ // Run once
 		start=1;
@@ -535,6 +561,7 @@ void update(){
 					my_base->InitState(*j);
 					for(int i=0;i<12;++i){
 						Position a=baseNeighbour[i]+my_base->pos;
+						a.z=SURFACE;
 						if(InMap(a) && MapInfo[a.x][a.y].map_type==OCEAN)
 							oceanNearMyBase.insert(a);
 					}
