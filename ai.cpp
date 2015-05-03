@@ -14,7 +14,7 @@
 
 #define AI_VERSION "wangqr_0.1-a2"
 
-#define MAX_FIGHTER_WAITING 13
+#define MAX_FIGHTER_WAITING 9
 
 using namespace teamstyle16;
 using std::vector;
@@ -95,11 +95,13 @@ map<Position,int,PosComp> metalPos;
 map<Position,int,PosComp> fuelPos;
 set<Position,PosComp> oceanNearMyBase;
 int start=0;
-
-
-
-
-
+struct UsedPos : public Position
+{
+	int round;
+	int index;
+};
+struct UsedPosComp												{bool operator() (const UsedPos& a, const UsedPos& b)	{if(a.round<b.round)return true; return a.x<b.x ||(a.x==b.x && (a.y<b.y || (a.y==b.y && a.z<b.z)));}};
+set<UsedPos,UsedPosComp> usedPos;
 
 enum UnitSignal
 {
@@ -164,7 +166,12 @@ struct Unit : public State
 				ammo=a.ammo;
 				metal=a.metal;
 			}
-
+			UsedPos p;
+			p.x=pos.x;
+			p.y=pos.y;
+			p.z=pos.z;
+			p.round=INFO->round;
+			usedPos.insert(p);
 		}
 		else if(type==BASE){
 			if(team==INFO->team_num){
@@ -237,13 +244,26 @@ void Unit::DoJob(){
 		vector<int> enemy_in_sight;
 		for(int i=0;i<INFO->element_num;++i){
 			const State* j=INFO->elements[i];
-			if(j->team!=my_team && InFireRange(*this,*j)){
+			if(j->team==1-my_team && InFireRange(*this,*j)){
 				enemy_in_sight.push_back(j->index);
 			}
 		}
 		if(!enemy_in_sight.empty()){
 			// [TODO] attacking order
 			AttackUnit(index,enemy_in_sight.front());
+		}
+		else{
+			enemy_in_sight.clear();
+			for(int i=0;i<INFO->element_num;++i){
+				const State* j=INFO->elements[i];
+				if(j->team==2 && InFireRange(*this,*j)){
+					enemy_in_sight.push_back(j->index);
+				}
+			}
+			if(!enemy_in_sight.empty()){
+				// [TODO] attacking order
+				AttackUnit(index,enemy_in_sight.front());
+			}
 		}
 	}
 }
@@ -269,6 +289,7 @@ struct Mine : public Resources
 		if(metal==0) run_out=true;
 		for(int i=1;i<4;++i){
 			Position a=pos+neighbour[i];
+			a.z=SURFACE;
 			if(InMap(a) && MapInfo[a.x][a.y].map_type==OCEAN){
 				if(run_out){
 					metalPos.erase(a);
@@ -288,6 +309,7 @@ struct OilField : public Resources
 		if(fuel==0) run_out=true;
 		for(int i=1;i<4;++i){
 			Position a=pos+neighbour[i];
+			a.z=SURFACE;
 			if(MapInfo[a.x][a.y].map_type==OCEAN){
 				if(run_out){
 					fuelPos.erase(a);
@@ -300,14 +322,19 @@ struct OilField : public Resources
 	}
 };
 
-
 Position FindMetalPos(Position pos){
 	Position a={0,0,-1};
+	UsedPos q;
 	if(metalPos.empty())return a;
 	a=metalPos.begin()->first;
 	int dis=RouteDis(pos,a);
 	for(map<Position,int,PosComp>::iterator i=metalPos.begin();i!=metalPos.end();++i){
 		int t=RouteDis(pos,i->first);
+		q.x=pos.x;
+		q.y=pos.y;
+		q.z=pos.z;
+		q.round=INFO->round+(t-1)/kProperty[CARGO].speed;
+		if(usedPos.find(q)!=usedPos.end())continue;
 		if(t<dis){
 			a=i->first;
 			dis=t;
@@ -318,11 +345,17 @@ Position FindMetalPos(Position pos){
 
 Position FindFuelPos(Position pos){
 	Position a={0,0,-1};
+	UsedPos q;
 	if(fuelPos.empty())return a;
 	a=fuelPos.begin()->first;
 	int dis=RouteDis(pos,a);
 	for(map<Position,int,PosComp>::iterator i=fuelPos.begin();i!=fuelPos.end();++i){
 		int t=RouteDis(pos,i->first);
+		q.x=i->first.x;
+		q.y=i->first.y;
+		q.z=i->first.z;
+		q.round=INFO->round+(t-1)/kProperty[CARGO].speed;
+		if(usedPos.find(q)!=usedPos.end())continue;
 		if(t<dis){
 			a=i->first;
 			dis=t;
@@ -333,9 +366,15 @@ Position FindFuelPos(Position pos){
 
 Position FindWayHome(Position pos){
 	Position a=*oceanNearMyBase.begin();
+	UsedPos q;
 	int dis=RouteDis(pos,a);
 	for(set<Position,PosComp>::iterator i=oceanNearMyBase.begin();i!=oceanNearMyBase.end();++i){
 		int t=RouteDis(pos,*i);
+		q.x=i->x;
+		q.y=i->y;
+		q.z=i->z;
+		q.round=INFO->round+(t-1)/kProperty[CARGO].speed;
+		if(usedPos.find(q)!=usedPos.end())continue;
 		if(t<dis){
 			a=*i;
 			dis=t;
@@ -419,6 +458,18 @@ struct Cargo : public Ship
 			}
 			a=job.front();
 			ChangeDest(index,a.pos);
+			for(set<UsedPos,UsedPosComp>::iterator i=usedPos.begin();i!=usedPos.end();++i){
+				if(i->index==index)usedPos.erase(i);
+			}
+			UsedPos q;
+			q.x=a.pos.x;
+			q.y=a.pos.y;
+			q.z=a.pos.z;
+			q.index=index;
+			q.round=INFO->round+(RouteDis(pos,a.pos)-1)/kProperty[CARGO].speed;
+			usedPos.insert(q);
+			++q.round;
+			usedPos.insert(q);
 		}
 	}
 	void SimpleInit(){
@@ -457,6 +508,7 @@ struct Scout : public AirForce
 
 void update(){
 	TryUpdate();
+	while(!usedPos.empty() && usedPos.begin()->round<INFO->round) usedPos.erase(usedPos.begin());
 	GSig.clear();
 	if(start==0){ // Run once
 		start=1;
@@ -543,8 +595,7 @@ void update(){
 			RaiseGsig(UNIT_LOST);
 		}
 	}
-
-
+	
 }
 
 void AIMain()
@@ -572,7 +623,7 @@ void AIMain()
 			if(INFO->production_list[i].unit_type==CARGO)
 				++c;
 		}
-		while(c<9){
+		while(c<min(2+INFO->round/5,oceanNearMyBase.size())){
 			Produce(CARGO);
 			++c;
 			j-=150;
@@ -590,7 +641,7 @@ void AIMain()
 				++fighter_with_no_job;
 			}
 		}
-		if(fighter_with_no_job>MAX_FIGHTER_WAITING){
+		if(fighter_with_no_job>=MAX_FIGHTER_WAITING){
 			for(map<int,Unit*>::iterator i=Units.begin();i!=Units.end();++i){
 				Unit& obj=*(i->second);
 				if(obj.type==FIGHTER && obj.job.empty()){
