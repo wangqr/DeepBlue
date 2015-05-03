@@ -13,9 +13,7 @@
 #include<set>
 #include<algorithm>
 
-#define AI_VERSION "v1.9-a1"
-
-#define MAX_FIGHTER_WAITING 9
+#define AI_VERSION "whatever_v1.9-a1"
 
 using namespace teamstyle16;
 using std::vector;
@@ -34,7 +32,39 @@ using std::max;
 using std::min_element;
 
 const GameInfo *INFO = Info();
+Position FindMetalPos(Position pos);
+Position FindFuelPos(Position pos);
+Position FindWayHome(Position pos);
 inline int Distance(Position pos1,Position pos2)				{return abs(pos1.x-pos2.x)+abs(pos1.y-pos2.y);}
+inline int DistanceToBase(Position base, Position pos){
+	if(pos.x < base.x-1)
+	{
+		if(pos.y > base.y+1)
+			return abs(pos.x - base.x+1) + abs(pos.y - base.y-1);
+		else if(pos.y < base.y - 1)
+			return abs(pos.x - base.x+1) + abs(pos.y - base.y + 1);
+		else 
+			return abs(pos.x - base.x+1);
+	}
+	else if(pos.x > base.x +1)
+	{
+		if(pos.y > base.y+1)
+			return abs(pos.x - base.x - 1) + abs(pos.y - base.y-1);
+		else if(pos.y < base.y - 1)
+			return abs(pos.x - base.x - 1) + abs(pos.y - base.y + 1);
+		else 
+			return abs(pos.x - base.x - 1);
+	}
+	else
+	{
+		if(pos.y > base.y+1)
+			return abs(pos.y - base.y-1);
+		else if(pos.y < base.y -1)
+			return abs(pos.y - base.y +1);
+		else 
+			return 0;
+	}
+}
 inline bool PxyEq(const Position& a,const Position& b)		{return a.x==b.x && a.y==b.y;}
 const char * GetTeamName()									{return AI_VERSION;}
 inline bool InSight (const State& a, const Position pos)		{return Distance(a.pos,pos)<=kProperty[a.type].sight_ranges[pos.z]+INFO->weather;}
@@ -97,6 +127,7 @@ int RouteDis(Position pos1, Position pos2) // BFS find distance via ocean
 map<Position,int,PosComp> metalPos;
 map<Position,int,PosComp> fuelPos;
 set<Position,PosComp> oceanNearMyBase;
+set<Position,PosComp> oceanNearEnemyBase;
 int start=0;
 struct UsedPos : public Position
 {
@@ -113,6 +144,50 @@ struct UsedPosComp
 	}
 };
 map<UsedPos,int,UsedPosComp> usedPos;
+map<Position,int,PosComp> occupiedPos;
+
+Position GetFreePlaceNearBase(const State& base, int dis_min, bool ocean,int z){
+	for(int k=dis_min;k<INFO->x_max+INFO->y_max;++k){
+		for(int x=0;x<INFO->x_max;++x)
+			for(int y=0;y<INFO->y_max;++y){
+				Position a;
+				a.x=x;
+				a.y=y;
+				a.z=z;
+				if(ocean && MapInfo[x][y].map_type!=OCEAN) continue;
+				if(DistanceToBase(base.pos,a)!=k){
+					continue;
+				}
+				if(occupiedPos.find(a)!=occupiedPos.end())
+					continue;
+				return a;
+			}
+	}
+	Position a={0,0,-1};
+	return a;
+}
+
+Position GetFreePlaceCarrier(const State& base, int z){
+	for(int k=8;k>0;--k){
+		for(int x=0;x<INFO->x_max;++x)
+			for(int y=0;y<INFO->y_max;++y){
+				Position a;
+				a.x=x;
+				a.y=y;
+				a.z=z;
+				if(MapInfo[x][y].map_type!=OCEAN) continue;
+				if(DistanceToBase(base.pos,a)!=k){
+					continue;
+				}
+				if(occupiedPos.find(a)!=occupiedPos.end())
+					continue;
+				return a;
+			}
+	}
+	Position a={0,0,-1};
+	return a;
+}
+
 
 enum UnitSignal
 {
@@ -161,7 +236,7 @@ struct Unit : public State
 	bool did_action;
 	virtual void sig_add(UnitSignal a){sig.insert(a);}
 	virtual void sig_remove(UnitSignal a){sig.erase(a);}
-	virtual void DoJob();
+	void DoJob();
 	virtual bool movable()=0;
 	virtual bool fireable()=0;
 	virtual void InitState(const State& a){
@@ -176,7 +251,8 @@ struct Unit : public State
 		metal=a.metal;
 		if(type==MINE && !a.visible) metal=500;
 		destination=a.destination;
-		last_seen=INFO->round;
+		last_seen=-1;
+		UpdateState(a);
 	}
 	virtual void UpdateState(const State& a){
 		if(!a.visible) return;
@@ -253,6 +329,15 @@ struct Base : public Building
 };
 Base* my_base;Base* enemy_base;
 
+inline void EraseOccupiedPos(int index){
+	map<Position,int,PosComp>::iterator i;
+	for(i=occupiedPos.begin();i!=occupiedPos.end();++i){
+		while(i!=occupiedPos.end() && i->second==index){
+			occupiedPos.erase(i);
+			i=occupiedPos.begin();
+		}
+	}
+}
 
 void Unit::DoJob(){
 	if(!job.empty()){
@@ -268,6 +353,83 @@ void Unit::DoJob(){
 					last_command_send_round=INFO->round;
 				}
 			}
+		}
+		if(type==CARGO){
+			// [FIXME] crash when no oilfield / mine
+			// [FIXME] some issue when resource point has low fuel / metal
+			// [FIXME] crash when resource run out in midway
+			// [FIXME] crash when mine is far away from base
+			// [TODO] not best routine
+			Job a=job.front();
+			if(PxyEq(pos,a.pos)){
+				if(a.type==a.COLLECT){
+					if(Units[a.target]->type==OILFIELD){
+						if(my_base->metal<200 && !metalPos.empty()){
+							a.pos=FindMetalPos(pos);
+							a.target=metalPos[a.pos];
+							job.pop();
+							job.push(a);
+						}
+						else{
+							a.type=a.SUPPLY;
+							a.pos=FindWayHome(pos);
+							a.target=my_base->index;
+							job.pop();
+							job.push(a);
+						}
+					}
+					else if(Units[a.target]->type==MINE){
+						a.type=a.SUPPLY;
+						a.pos=FindWayHome(pos);
+						a.target=my_base->index;
+						job.pop();
+						job.push(a);
+					}
+				}
+				else if(!fuelPos.empty()){ // [FIXME] jump some process
+					Position q=FindFuelPos(pos);
+					int fn=RouteDis(pos,q)+20;
+					Supply(index,my_base->index,fuel-fn,0,metal);
+					a.type=a.COLLECT;
+					a.pos=q;
+					a.target=fuelPos[q];
+					job.pop();
+					job.push(a);
+				}
+				else if(fuel){
+					while(!job.empty())job.pop();
+					a.type=a.ATTACK;
+					a.target=enemy_base->index;
+					a.pos=GetFreePlaceNearBase(*enemy_base,1,true,SURFACE);
+					EraseOccupiedPos(index);
+					occupiedPos[a.pos]=index;
+					job.push(a);
+				}
+				else{
+					EraseOccupiedPos(index);
+					occupiedPos[pos]=index;
+				}
+			}
+
+			a=job.front();
+			ChangeDest(index,a.pos);
+			map<UsedPos,int,UsedPosComp>::iterator i;
+			for(i=usedPos.begin();i!=usedPos.end();++i){
+				while(i!=usedPos.end() && i->second==index){
+					usedPos.erase(i);
+					i=usedPos.begin();
+				}
+			}
+			UsedPos q;
+			q.x=a.pos.x;
+			q.y=a.pos.y;
+			q.z=a.pos.z;
+			q.round=INFO->round+(RouteDis(pos,a.pos)-1)/kProperty[type].speed;
+			printf("[DEBUG] used pos (%d,%d,%d,%d)\n",q.x,q.y,q.z,q.round);
+			usedPos[q]=index;
+			++q.round;
+			printf("[DEBUG] used pos (%d,%d,%d,%d)\n",q.x,q.y,q.z,q.round);
+			usedPos[q]=index;
 		}
 	}
 	if(fireable() && last_command_send_round<INFO->round){
@@ -295,7 +457,11 @@ void Unit::DoJob(){
 			struct
 			{
 				bool operator()(int a,int b){
-					if(Units[a]->health < Units[b]->health)
+					if(a==enemy_base->index)
+						return true;
+					else if(b==enemy_base->index)
+						return false;
+					else if(Units[a]->health < Units[b]->health)
 						return true;
 					else
 						return false;
@@ -304,7 +470,11 @@ void Unit::DoJob(){
 			int j=*min_element(enemy_in_sight.begin(),enemy_in_sight.end(),comp_obj);
 			AttackUnit(index,j);
 			Units[j]->health-=GetDamage(*this,*Units[j]);
+			last_command_send_round=INFO->round;
 		}
+	}
+	if(type==BASE && last_command_send_round<INFO->round){
+		
 	}
 }
 struct Fort : public Building
@@ -458,95 +628,11 @@ struct Carrier : public Ship
 struct Cargo : public Ship
 {
 	bool fireable(){return false;}
-	void DoJob(){
-		if(!job.empty()){
-			// [FIXME] crash when no oilfield / mine
-			// [FIXME] some issue when resource point has low fuel / metal
-			// [FIXME] crash when resource run out in midway
-			// [FIXME] crash when mine is far away from base
-			// [TODO] not best routine
-			Job a=job.front();
-			if(PxyEq(pos,a.pos)){
-				if(a.type==a.COLLECT){
-					if(Units[a.target]->type==OILFIELD){
-						if(my_base->metal<kProperty[BASE].metal_max){
-							a.pos=FindMetalPos(pos);
-							a.target=metalPos[a.pos];
-							job.pop();
-							job.push(a);
-						}
-						else{
-							a.type=a.SUPPLY;
-							a.pos=FindWayHome(pos);
-							a.target=my_base->index;
-							job.pop();
-							job.push(a);
-						}
-					}
-					else if(Units[a.target]->type==MINE){
-						a.type=a.SUPPLY;
-						a.pos=FindWayHome(pos);
-						a.target=my_base->index;
-						job.pop();
-						job.push(a);
-					}
-				}
-				else{ // [FIXME] jump some process
-					Position q=FindFuelPos(pos);
-					int fn=RouteDis(pos,q)+20;
-					Supply(index,my_base->index,fuel-fn,0,metal);
-					a.type=a.COLLECT;
-					a.pos=q;
-					a.target=fuelPos[q];
-					job.pop();
-					job.push(a);
-				}
-			}
-			a=job.front();
-			ChangeDest(index,a.pos);
-			for(map<UsedPos,int,UsedPosComp>::iterator i=usedPos.begin();i!=usedPos.end();++i){
-				if(i->second==index)usedPos.erase(i);
-			}
-			UsedPos q;
-			q.x=a.pos.x;
-			q.y=a.pos.y;
-			q.z=a.pos.z;
-			q.round=INFO->round+(RouteDis(pos,a.pos)-1)/kProperty[type].speed;
-			printf("[DEBUG] used pos (%d,%d,%d,%d)\n",q.x,q.y,q.z,q.round);
-			usedPos[q]=index;
-			++q.round;
-			printf("[DEBUG] used pos (%d,%d,%d,%d)\n",q.x,q.y,q.z,q.round);
-			usedPos[q]=index;
-		}
-	}
 	void SimpleInit(){
 		Job a;
 		a.pos=pos;
 		a.type=a.SUPPLY;
 		a.target=my_base->index;
-		/*
-		Position q=FindFuelPos(pos);
-		UsedPos p;
-		p.x=q.x;
-		p.y=q.y;
-		p.z=q.z;
-		p.round=INFO->round+(RouteDis(pos,q)-1)/kProperty[CARGO].speed;
-		printf("[DEBUG] used pos (%d,%d,%d,%d)\n",p.x,p.y,p.z,p.round);
-		usedPos[p]=index;
-		++p.round;
-		printf("[DEBUG] used pos (%d,%d,%d,%d)\n",p.x,p.y,p.z,p.round);
-		usedPos[p]=index;
-		int fn=RouteDis(pos,q)+5;
-		if(fn<fuel){
-			Supply(index,my_base->index,fuel-fn,0,0);
-		}
-		else if(fn>fuel){
-			Supply(my_base->index,index,fn-fuel,0,0);
-		}
-		a.type=a.COLLECT;
-		a.pos=q;
-		a.target=fuelPos[q];
-		*/
 		job.push(a);
 	}
 };
@@ -606,6 +692,12 @@ void update(){
 					enemy_base=new Base;
 					Units[j->index]=enemy_base;
 					enemy_base->InitState(*j);
+					for(int i=0;i<12;++i){
+						Position a=baseNeighbour[i]+enemy_base->pos;
+						a.z=SURFACE;
+						if(InMap(a) && MapInfo[a.x][a.y].map_type==OCEAN)
+							oceanNearEnemyBase.insert(a);
+					}
 				}
 			}
 			else if(j->type==FORT){
@@ -652,6 +744,7 @@ void update(){
 
 	for(map<int,Unit*>::iterator i=Units.begin();i!=Units.end();++i){
 		if(i->second->team==my_team && i->second->last_seen<INFO->round){
+			EraseOccupiedPos(i->second->index);
 			delete i->second;
 			Units.erase(i);
 			i=Units.begin();
@@ -687,12 +780,15 @@ void AIMain()
 				if(INFO->production_list[i].unit_type==CARGO)
 					++c;
 			}
-			while(j>=150 && c<min(unsigned(2+INFO->round/5),oceanNearMyBase.size())){
+			while(j>=150 && c<min(unsigned(3+INFO->round/5),oceanNearMyBase.size()) && (!fuelPos.empty())){
 				Produce(CARGO);
 				++c;
 				j-=150;
 			}
+			if(c<min(unsigned(3+INFO->round/5),oceanNearMyBase.size()) && !fuelPos.empty())
+				j=0;
 		}
+		
 		for(int i=0;i<min(my_base->metal/kProperty[FIGHTER].cost,
 			j/(kProperty[FIGHTER].fuel_max-1));++i){
 				Produce(FIGHTER);
@@ -701,16 +797,19 @@ void AIMain()
 			unsigned fighter_with_no_job=0;
 			for(map<int,Unit*>::iterator i=Units.begin();i!=Units.end();++i){
 				Unit& obj=*(i->second);
-				if(obj.type==FIGHTER && Distance(obj.pos,my_base->pos)<8){
+				if(obj.type==FIGHTER && obj.job.empty()){
 					++fighter_with_no_job;
 				}
 			}
-			int fighter_in_production_list=0;
+			unsigned fighter_in_production_list=0;
 			for(int i=0;i<INFO->production_num;++i){
-				if(INFO->production_list[i].unit_type==FIGHTER && INFO->production_list[i].round_left<=0)
+				if(INFO->production_list[i].unit_type==FIGHTER && INFO->production_list[i].round_left<=0){
 					++fighter_in_production_list;
+				}
 			}
-			if(fighter_with_no_job>=MAX_FIGHTER_WAITING  && !HasGSig(BASE_UNDER_ATTACK) && fighter_in_production_list>=4){
+			if(fuelPos.empty()||((fighter_with_no_job>=9)  && !HasGSig(BASE_UNDER_ATTACK) && (fighter_in_production_list>=4))){
+				printf("[DEBUG] fighter_with_no_job %d\n",fighter_with_no_job);
+				printf("[DEBUG] fighter_in_production_list %d\n",fighter_in_production_list);
 				for(map<int,Unit*>::iterator i=Units.begin();i!=Units.end();++i){
 					Unit& obj=*(i->second);
 					if(obj.type==FIGHTER && obj.job.empty()){
@@ -753,35 +852,120 @@ void AIMain()
 				j-=150;
 			}
 		}
-		int free_submarine=0;
-
-		for(int i=0;i<min(my_base->metal/kProperty[SUBMARINE].cost,
-			min(j/(kProperty[SUBMARINE].fuel_max),6));++i){
-				Produce(FIGHTER);
+		if(j<150)j=0;
+		{
+			unsigned c=0;
+			for(map<int,Unit*>::iterator i=Units.begin();i!=Units.end();++i){
+				if(i->second->team==my_team && i->second->type==SCOUT)
+					++c;
+			}
+			for(int i=0;i<INFO->production_num;++i){
+				if(INFO->production_list[i].unit_type==SCOUT)
+					++c;
+			}
+			while(j>=120 && c<((INFO->weather<-2 && INFO->round>=20)?1:0)){
+				Produce(SCOUT);
+				++c;
+				j-=120;
+			}
+			if(INFO->weather<-2 && INFO->round>=20 && c==0){
+				j=0;
+			}
 		}
-		{									// if fighter_with_no_job>13 then attack a given pos
-			unsigned fighter_with_no_job=0;
+		{
+			unsigned c=0;
+			for(map<int,Unit*>::iterator i=Units.begin();i!=Units.end();++i){
+				if(i->second->team==my_team && i->second->type==FIGHTER)
+					++c;
+			}
+			for(int i=0;i<INFO->production_num;++i){
+				if(INFO->production_list[i].unit_type==FIGHTER)
+					++c;
+			}
+			while(j>=100 && c<((INFO->round>=10)?4:0)){
+				Produce(FIGHTER);
+				++c;
+				j-=100;
+			}
+			if(INFO->round>=10 && c<4){
+				j=0;
+			}
+		}
+		{
+			unsigned c=0;
+			for(map<int,Unit*>::iterator i=Units.begin();i!=Units.end();++i){
+				if(i->second->team==my_team && i->second->type==CARRIER && i->second->job.empty())
+					++c;
+			}
+			for(int i=0;i<INFO->production_num;++i){
+				if(INFO->production_list[i].unit_type==CARRIER)
+					++c;
+			}
+			while(j>=200 && c<6 && !fuelPos.empty()){
+				Produce(CARRIER);
+				++c;
+				j-=200;
+			}
+			if(c<6 && !fuelPos.empty()){
+				j=0;
+			}
+		}
+		{
+			unsigned c=0;
+			for(map<int,Unit*>::iterator i=Units.begin();i!=Units.end();++i){
+				if(i->second->team==my_team && i->second->type==SUBMARINE && i->second->job.empty())
+					++c;
+			}
+			for(int i=0;i<INFO->production_num;++i){
+				if(INFO->production_list[i].unit_type==SUBMARINE)
+					++c;
+			}
+			while(j>=120 && c<12){
+				Produce(SUBMARINE);
+				++c;
+				j-=120;
+			}
+			if(c<12){
+				j=0;
+			}
+		}
+		if(j){
 			for(map<int,Unit*>::iterator i=Units.begin();i!=Units.end();++i){
 				Unit& obj=*(i->second);
-				if(obj.type==FIGHTER && obj.job.empty() && obj.last_seen==INFO->round){
-					++fighter_with_no_job;
+				if(obj.type==SUBMARINE && obj.job.empty()){
+					Job a;
+					a.type=a.ATTACK;
+					a.target=enemy_base->index;
+					a.pos=GetFreePlaceNearBase(*enemy_base,1,true,SURFACE);
+					EraseOccupiedPos(obj.index);
+					occupiedPos[a.pos]=obj.index;
+					obj.job.push(a);
+				}
+				if(obj.type==CARRIER && obj.job.empty()){
+					Job a;
+					a.type=a.ATTACK;
+					a.target=enemy_base->index;
+					a.pos=GetFreePlaceCarrier(*enemy_base,SURFACE);
+					EraseOccupiedPos(obj.index);
+					occupiedPos[a.pos]=obj.index;
+					obj.job.push(a);
 				}
 			}
-			int fighter_in_production_list=0;
-			for(int i=0;i<INFO->production_num;++i){
-				if(INFO->production_list[i].unit_type==FIGHTER && INFO->production_list[i].round_left<=1)
-					++fighter_in_production_list;
-			}
-			if(fighter_with_no_job>=MAX_FIGHTER_WAITING  && !HasGSig(BASE_UNDER_ATTACK) && fighter_in_production_list>=4){
-				for(map<int,Unit*>::iterator i=Units.begin();i!=Units.end();++i){
-					Unit& obj=*(i->second);
-					if(obj.type==FIGHTER && obj.job.empty()){
-						Job a;
-						a.type=a.ATTACK;
-						a.target=enemy_base->index;
-						a.pos=obj.pos+(enemy_base->pos-my_base->pos);
-						obj.job.push(a);
-					}
+		}
+		else{
+			for(map<int,Unit*>::iterator i=Units.begin();i!=Units.end();++i){
+				Unit& obj=*(i->second);
+				if(obj.type==SUBMARINE && DistanceToBase(my_base->pos,obj.pos)==1){
+					Position pos=GetFreePlaceNearBase(*my_base,2,true,UNDERWATER);
+					EraseOccupiedPos(obj.index);
+					occupiedPos[pos]=obj.index;
+					ChangeDest(obj.index,pos);
+				}
+				if(obj.type==CARRIER && obj.job.empty()){
+					Position pos=GetFreePlaceNearBase(*my_base,2,true,SURFACE);
+					EraseOccupiedPos(obj.index);
+					occupiedPos[pos]=obj.index;
+					ChangeDest(obj.index,pos);
 				}
 			}
 		}
@@ -808,11 +992,12 @@ void AIMain()
 /*
 
 基地维修、补弹药
-初始运输船向基地补给
 初始运输船数量
 资源空时不造运输船/运输船停至对方基地
-
+运输船还是会卡住
 临海的己方据点视为矿
+
+优先打掉敌方基地附近的据点
 
 */
 
@@ -825,6 +1010,5 @@ void AIMain()
 潜艇，12个，外移
 
 航母尽量不要被据点打
-
 
 */
