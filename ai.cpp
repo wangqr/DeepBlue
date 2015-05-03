@@ -69,8 +69,11 @@ inline bool PxyEq(const Position& a,const Position& b)		{return a.x==b.x && a.y=
 const char * GetTeamName()									{return AI_VERSION;}
 inline bool InSight (const State& a, const Position pos)		{return Distance(a.pos,pos)<=kProperty[a.type].sight_ranges[pos.z]+INFO->weather;}
 inline bool InSight (const Position pos)						{for(int i=0;i<INFO->element_num;++i){const State& a=*INFO->elements[i];if(a.team != INFO->team_num) continue;if(InSight(a,pos))return true;}return false;}
-inline bool InFireRange(const State& a, const Position pos)	{return Distance(a.pos,pos)<=kProperty[a.type].fire_ranges[pos.z];}
-inline bool InFireRange(const State& a, const State& b)		{if((kProperty[a.type].attacks[0]==0 || kProperty[b.type].defences[0]==-1) &&(kProperty[a.type].attacks[1]==0 || kProperty[b.type].defences[1]==-1)) return false;return InFireRange(a,b.pos);}
+inline bool InFireRange(const State& a, const Position pos)	{
+	return Distance(a.pos,pos)<=kProperty[a.type].fire_ranges[pos.z];}
+inline bool InFireRange(const State& a, const State& b)		{
+	//if((kProperty[a.type].attacks[0]==0 || kProperty[b.type].defences[0]==-1) &&(kProperty[a.type].attacks[1]==0 || kProperty[b.type].defences[1]==-1)) return false;
+	return InFireRange(a,b.pos);}
 inline bool InMap(int x,int y)								{return 0<=x && x<INFO->x_max && 0<=y && y<INFO->y_max;}
 inline bool InMap(const Position& pos)						{return InMap(pos.x,pos.y);}
 Position operator+ (const Position& a, const Position& b)	{Position temp;temp.x=a.x+b.x;temp.y=a.y+b.y;temp.z=-1;return temp;}
@@ -168,7 +171,7 @@ Position GetFreePlaceNearBase(const State& base, int dis_min, bool ocean,int z){
 }
 
 Position GetFreePlaceCarrier(const State& base, int z){
-	for(int k=8;k>0;--k){
+	for(int k=kProperty[CARRIER].fire_ranges[kProperty[BASE].level]-1;k>0;--k){
 		for(int x=0;x<INFO->x_max;++x)
 			for(int y=0;y<INFO->y_max;++y){
 				Position a;
@@ -195,10 +198,10 @@ enum UnitSignal
 };
 
 inline int GetDamage(const State& source, const State& target){
-	int distance=Distance(source.pos,target.pos);
-	int fire_range = kProperty[source.type].fire_ranges[kProperty[target.type].level];
 	int modified_attacks[2];
 	if(source.type!=CARRIER){
+		int distance=Distance(source.pos,target.pos);
+		int fire_range = kProperty[source.type].fire_ranges[kProperty[target.type].level];
 		modified_attacks[0] = int((1 - float(distance - fire_range / 2) / (fire_range + 1)) * kProperty[source.type].attacks[0]);
 		modified_attacks[1] = int((1 - float(distance - fire_range / 2) / (fire_range + 1)) * kProperty[source.type].attacks[1]);
 	}
@@ -345,6 +348,20 @@ inline void EraseOccupiedPos(int index){
 	}
 }
 
+			struct CompHealth
+			{
+				bool operator()(int a,int b){
+					if(a==enemy_base->index)
+						return true;
+					else if(b==enemy_base->index)
+						return false;
+					else if(Units[a]->health < Units[b]->health)
+						return true;
+					else
+						return false;
+				}
+			} comp_obj;
+
 void Unit::DoJob(){
 	if(!job.empty()){
 		Job a=job.front();
@@ -352,8 +369,12 @@ void Unit::DoJob(){
 			if(!PxyEq(destination,a.pos)){
 				ChangeDest(index,a.pos);
 			}
-			if(InFireRange(*this,*Units[a.target])){
-				if(GetDamage(*Units[index],*Units[a.target])>0){
+			if(InFireRange(*this,*Units[a.target]))
+			{
+				printf("[DEBUG] InFireRange\n");
+				//if(GetDamage(*this,*Units[a.target])>0){
+				{
+					printf("[DEBUG] PerformAttack\n");
 					AttackUnit(index,a.target);
 					Units[a.target]->health-=GetDamage(*Units[index],*Units[a.target]);
 					last_command_send_round=INFO->round;
@@ -460,19 +481,7 @@ void Unit::DoJob(){
 			}
 		}
 		if(!enemy_in_sight.empty()){
-			struct
-			{
-				bool operator()(int a,int b){
-					if(a==enemy_base->index)
-						return true;
-					else if(b==enemy_base->index)
-						return false;
-					else if(Units[a]->health < Units[b]->health)
-						return true;
-					else
-						return false;
-				}
-			} comp_obj;
+
 			int j=*min_element(enemy_in_sight.begin(),enemy_in_sight.end(),comp_obj);
 			AttackUnit(index,j);
 			Units[j]->health-=GetDamage(*this,*Units[j]);
@@ -786,12 +795,12 @@ void AIMain()
 				if(INFO->production_list[i].unit_type==CARGO)
 					++c;
 			}
-			while(j>=150 && c<min(unsigned(3+INFO->round/5),oceanNearMyBase.size()) && (!fuelPos.empty())){
+			while(j>=150 && c<min(unsigned(3+INFO->round/5),unsigned(oceanNearMyBase.size())) && (!fuelPos.empty())){
 				Produce(CARGO);
 				++c;
 				j-=150;
 			}
-			if(c<min(unsigned(3+INFO->round/5),oceanNearMyBase.size()) && !fuelPos.empty())
+			if(c<min(unsigned(3+INFO->round/5),unsigned(oceanNearMyBase.size())) && !fuelPos.empty())
 				j=0;
 		}
 		
@@ -852,7 +861,7 @@ void AIMain()
 				if(INFO->production_list[i].unit_type==CARGO)
 					++c;
 			}
-			while(j>=150 && c<min(INFO->round<=1?6u:12u,oceanNearMyBase.size())){
+			while(j>=150 && c<min(INFO->round<=1?6u:12u,unsigned(oceanNearMyBase.size()))){
 				Produce(CARGO);
 				++c;
 				j-=150;
