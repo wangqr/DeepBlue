@@ -12,10 +12,9 @@
 #include<map>
 #include<set>
 
-// TODO use multi-thread to speed up
-//#include<pthread.h>
+#define AI_VERSION "wangqr_0.1-a2"
 
-#define AI_VERSION "wangqr_0.1-a1"
+#define MAX_FIGHTER_WAITING 13
 
 using namespace teamstyle16;
 using std::vector;
@@ -35,9 +34,10 @@ inline int max(const int& x, const int& y)					{return x>y?x:y;}
 inline int min(const int& x, const int& y)					{return x<y?x:y;}
 inline bool PxyEq(const Position& a,const Position& b)		{return a.x==b.x && a.y==b.y;}
 const char * GetTeamName()									{return AI_VERSION;}
-inline bool InSight (const State& a, Position pos)			{return Distance(a.pos,pos)<=kProperty[a.type].sight_ranges[pos.z]+INFO->weather;}
-inline bool InSight (Position pos)							{for(int i=0;i<INFO->element_num;++i){const State& a=*INFO->elements[i];if(a.team != INFO->team_num) continue;if(InSight(a,pos))return true;}return false;}
-inline bool InFireRange(const State& a, Position pos)		{return Distance(a.pos,pos)<=kProperty[a.type].fire_ranges[pos.z];}
+inline bool InSight (const State& a, const Position pos)		{return Distance(a.pos,pos)<=kProperty[a.type].sight_ranges[pos.z]+INFO->weather;}
+inline bool InSight (const Position pos)						{for(int i=0;i<INFO->element_num;++i){const State& a=*INFO->elements[i];if(a.team != INFO->team_num) continue;if(InSight(a,pos))return true;}return false;}
+inline bool InFireRange(const State& a, const Position pos)	{return Distance(a.pos,pos)<=kProperty[a.type].fire_ranges[pos.z];}
+inline bool InFireRange(const State& a, const State& b)		{if((kProperty[a.type].attacks[0]==0 || kProperty[b.type].defences[0]==-1) &&(kProperty[a.type].attacks[1]==0 || kProperty[b.type].defences[1]==-1)) return false;return InFireRange(a,b.pos);}
 inline bool InMap(int x,int y)								{return 0<=x && x<INFO->x_max && 0<=y && y<INFO->y_max;}
 inline bool InMap(Position pos)								{return InMap(pos.x,pos.y);}
 Position operator+ (const Position& a, const Position& b)	{Position temp;temp.x=a.x+b.x;temp.y=a.y+b.y;temp.z=-1;return temp;}
@@ -50,11 +50,8 @@ struct ExtMapType
 	MapType map_type;
 };
 vector<vector<ExtMapType> > MapInfo;
-
-struct Unit;map<int,Unit*> Units; // [IMPORTANT] All data is here.
-struct Base;Base* my_base;Base* enemy_base;
-
-int RouteDis(Position pos1, Position pos2) // [BFS] find distance via ocean
+int my_team;
+int RouteDis(Position pos1, Position pos2) // BFS find distance via ocean
 {
 	if(pos1.x==pos2.x && pos1.y==pos2.y)return 0;
 	queue<pair<int,int> >bfs;
@@ -94,11 +91,215 @@ int RouteDis(Position pos1, Position pos2) // [BFS] find distance via ocean
 	}
 	return -1;
 }
-
-int my_team;
 map<Position,int,PosComp> metalPos;
 map<Position,int,PosComp> fuelPos;
 set<Position,PosComp> oceanNearMyBase;
+int start=0;
+
+
+
+
+
+
+enum UnitSignal
+{
+	UNDER_ATTACK
+};
+
+
+
+struct Job
+{
+	enum {ATTACK,REPAIR,SUPPLY,COLLECT} type;
+	Position pos;
+	int target;
+};
+
+enum GlobalSignal
+{
+	CARGO_UNDER_ATTACT,
+	BASE_UNDER_ATTACT,
+	UNIT_LOST,
+	UNIT_GENERATED,
+};
+set<GlobalSignal> GSig;
+inline void RaiseGsig(GlobalSignal a){GSig.insert(a);}
+inline void EraseGsig(GlobalSignal a){GSig.erase(a);}
+
+struct Unit : public State
+{
+	set<UnitSignal> sig;
+	queue<Job> job;
+	int last_command_send_round;
+	int last_seen;
+	bool did_action;
+	virtual void sig_add(UnitSignal a){sig.insert(a);}
+	virtual void sig_remove(UnitSignal a){sig.erase(a);}
+	virtual void DoJob();
+	virtual bool movable()=0;
+	virtual bool fireable()=0;
+	virtual void InitState(const State& a){
+		index=a.index;
+		type=a.type;
+		pos=a.pos;
+		team=a.team;
+		health=a.health;
+		fuel=a.fuel;
+		if(type==OILFIELD && !a.visible) fuel=1000;
+		ammo=a.ammo;
+		metal=a.metal;
+		if(type==MINE && !a.visible) metal=500;
+		destination=a.destination;
+		last_seen=INFO->round;
+	}
+	virtual void UpdateState(const State& a){
+		if(!a.visible) return;
+		last_seen=INFO->round;
+		if(movable()){
+			pos=a.pos;
+			if(health>a.health) sig_add(UNDER_ATTACK);
+			health=a.health;
+			if(team==INFO->team_num){
+				fuel=a.fuel;
+				ammo=a.ammo;
+				metal=a.metal;
+			}
+
+		}
+		else if(type==BASE){
+			if(team==INFO->team_num){
+				if(health>a.health){
+					sig_add(UNDER_ATTACK);
+					RaiseGsig(BASE_UNDER_ATTACT);
+				}
+				else{
+					sig_remove(UNDER_ATTACK);
+				}
+				health=a.health;
+				fuel=a.fuel;
+				metal=a.metal;
+			}
+			else{
+				if(health>a.health){
+					sig_add(UNDER_ATTACK);
+				}
+				else{
+					sig_remove(UNDER_ATTACK);
+				}
+				health=a.health;
+			}
+		}
+		else if(type==OILFIELD){
+			fuel=a.fuel;
+		}
+		else if(type==MINE){
+			metal=a.metal;
+		}
+	}
+	virtual void SimpleInit(){}
+};
+map<int,Unit*> Units;
+
+inline bool HasSig(const Unit& a,const UnitSignal& b){return a.sig.find(b)!=a.sig.end();}
+
+struct Building : public Unit
+{
+	bool movable(){return false;}
+	bool fireable(){return true;}
+};
+
+struct Base : public Building
+{
+	Base():Building(){
+		Position n;
+		n.z=-1;
+		for(int i=0;i<kElementTypes;++i){
+			rally_point[i]=n;
+		}
+	}
+	Position rally_point[kElementTypes]; // [FIXME] no use
+};
+Base* my_base;Base* enemy_base;
+void Unit::DoJob(){
+	if(!job.empty()){
+		Job a=job.front();
+		if(a.type==a.ATTACK){
+			if(!PxyEq(destination,a.pos)){
+				ChangeDest(index,a.pos);
+			}
+			if(InFireRange(*this,*Units[a.target])){
+				AttackUnit(index,a.target);
+				last_command_send_round=INFO->round;
+			}
+		}
+	}
+	if(fireable() && last_command_send_round<INFO->round){
+		vector<int> enemy_in_sight;
+		for(int i=0;i<INFO->element_num;++i){
+			const State* j=INFO->elements[i];
+			if(j->team!=my_team && InFireRange(*this,*j)){
+				enemy_in_sight.push_back(j->index);
+			}
+		}
+		if(!enemy_in_sight.empty()){
+			// [TODO] attacking order
+			AttackUnit(index,enemy_in_sight.front());
+		}
+	}
+}
+struct Fort : public Building
+{
+
+};
+
+struct Resources : public Unit
+{
+	bool movable(){return false;}
+	bool fireable(){return false;}
+	bool run_out;
+	Resources(){
+		run_out=false;
+	}
+};
+
+struct Mine : public Resources
+{
+	void UpdateState(const State& a){
+		Resources::UpdateState(a);
+		if(metal==0) run_out=true;
+		for(int i=1;i<4;++i){
+			Position a=pos+neighbour[i];
+			if(InMap(a) && MapInfo[a.x][a.y].map_type==OCEAN){
+				if(run_out){
+					metalPos.erase(a);
+				}
+				else{
+					metalPos[a]=index;
+				}
+			}
+		}
+	}
+};
+
+struct OilField : public Resources
+{
+	void UpdateState(const State& a){
+		Resources::UpdateState(a);
+		if(fuel==0) run_out=true;
+		for(int i=1;i<4;++i){
+			Position a=pos+neighbour[i];
+			if(MapInfo[a.x][a.y].map_type==OCEAN){
+				if(run_out){
+					fuelPos.erase(a);
+				}
+				else{
+					fuelPos[a]=index;
+				}
+			}
+		}
+	}
+};
+
 
 Position FindMetalPos(Position pos){
 	Position a={0,0,-1};
@@ -143,198 +344,10 @@ Position FindWayHome(Position pos){
 	return a;
 }
 
-int start=0;
-
-enum UnitSignal
-{
-	UNDER_ATTACK
-};
-
-struct Job
-{
-	enum {ATTACK,REPAIR,SUPPLY,COLLECT} type;
-	Position pos;
-	int target;
-};
-
-enum GlobalSignal
-{
-	CARGO_UNDER_ATTACT,
-	BASE_UNDER_ATTACT,
-	UNIT_LOST,
-	UNIT_GENERATED,
-};
-
-set<GlobalSignal> GSig;
-inline void RaiseGsig(GlobalSignal a){GSig.insert(a);}
-inline void EraseGsig(GlobalSignal a){GSig.erase(a);}
-
-struct Unit : public State
-{
-	set<UnitSignal> sig;
-	queue<Job> job;
-	int last_seen;
-	virtual void sig_add(UnitSignal a){sig.insert(a);}
-	virtual void sig_remove(UnitSignal a){sig.erase(a);}
-	virtual void DoJob(){
-		if(!job.empty()){
-			Job a=job.front();
-			if(a.type==a.ATTACK){
-				if(!PxyEq(destination,a.pos)){
-					ChangeDest(index,a.pos);
-				}
-				if(InFireRange(*this,Units[a.target]->pos))
-					AttackUnit(index,a.target);
-			}
-		}
-	}
-	virtual bool movable(){return false;};
-	virtual void InitState(const State& a){
-		index=a.index;
-		type=a.type;
-		pos=a.pos;
-		team=a.team;
-		visible=a.visible;
-		health=a.health;
-		fuel=a.fuel;
-		ammo=a.ammo;
-		metal=a.metal;
-		destination=a.destination;
-		last_seen=INFO->round;
-	}
-	virtual void UpdateState(const State& a){
-		//if(index!=a.index)return;
-		if(movable() && a.visible){
-			pos=a.pos;
-			if(health>a.health) sig_add(UNDER_ATTACK);
-			health=a.health;
-			if(team==INFO->team_num){
-				fuel=a.fuel;
-				ammo=a.ammo;
-				metal=a.metal;
-			}
-			last_seen=INFO->round;
-		}
-		else if(!movable()){
-			if(type==BASE){
-				if(team==INFO->team_num){
-					if(health>a.health){
-						sig_add(UNDER_ATTACK);
-						RaiseGsig(BASE_UNDER_ATTACT);
-					}
-					else{
-						sig_remove(UNDER_ATTACK);
-					}
-					health=a.health;
-					fuel=a.fuel;
-					metal=a.metal;
-					last_seen=INFO->round;
-				}
-				else{
-					if(health>a.health){
-						sig_add(UNDER_ATTACK);
-					}
-					else{
-						sig_remove(UNDER_ATTACK);
-					}
-					health=a.health;
-				}
-			}
-		}
-	}
-	virtual void SimpleInit(){}
-};
-
-struct Building : public Unit
-{
-	bool movable(){return false;}
-};
-
-struct Base : public Building
-{
-	Base():Building(){
-		Position n;
-		n.z=-1;
-		for(int i=0;i<kElementTypes;++i){
-			rally_point[i]=n;
-		}
-	}
-	Position rally_point[kElementTypes]; // FIXME no use
-	void DoJob(){
-		if(job.empty()){
-			vector<int> enemy_in_sight;
-			for(int i=0;i<INFO->element_num;++i){
-				const State* j=INFO->elements[i];
-				if(InFireRange(*my_base,j->pos)){
-					enemy_in_sight.push_back(j->index);
-				}
-			}
-			if(!enemy_in_sight.empty()){
-				//TODO attack order
-				AttackUnit(my_base->index,enemy_in_sight.front());
-			}
-		}
-		else{
-			Building::DoJob();
-		}
-	}
-};
-
-struct Fort : public Building
-{
-
-};
-
-struct Resources : public Unit
-{
-	bool movable(){return false;}
-	bool run_out;
-	Resources(){
-		run_out=false;
-	}
-};
-
-struct Mine : public Resources
-{
-	void UpdateState(const State& a){
-		Resources::UpdateState(a);
-		if(visible && metal==0) run_out=true;
-		for(int i=1;i<4;++i){
-			Position a=pos+neighbour[i];
-			if(InMap(a) && MapInfo[a.x][a.y].map_type==OCEAN){
-				if(run_out){
-					metalPos.erase(a);
-				}
-				else{
-					metalPos[a]=index;
-				}
-			}
-		}
-	}
-};
-
-struct OilField : public Resources
-{
-	void UpdateState(const State& a){
-		Resources::UpdateState(a);
-		if(visible && fuel==0) run_out=true;
-		for(int i=1;i<4;++i){
-			Position a=pos+neighbour[i];
-			if(MapInfo[a.x][a.y].map_type==OCEAN){
-				if(run_out){
-					fuelPos.erase(a);
-				}
-				else{
-					fuelPos[a]=index;
-				}
-			}
-		}
-	}
-};
-
 struct MovableUnit : public Unit
 {
 	bool movable(){return true;}
+	virtual bool fireable(){return true;}
 };
 
 struct Ship : public MovableUnit
@@ -359,8 +372,14 @@ struct Carrier : public Ship
 
 struct Cargo : public Ship
 {
+	bool fireable(){return false;}
 	void DoJob(){
 		if(!job.empty()){
+			// [FIXME] crash when no oilfield / mine
+			// [FIXME] some issue when resource point has low fuel / metal
+			// [FIXME] crash when resource run out in midway
+			// [FIXME] crash when mine is far away from base
+			// [TODO] not best routine
 			Job a=job.front();
 			if(PxyEq(pos,a.pos)){
 				if(a.type==a.COLLECT){
@@ -387,10 +406,9 @@ struct Cargo : public Ship
 						job.push(a);
 					}
 				}
-				else{ // FIXME jump some process
+				else{ // [FIXME] jump some process
 					Position q=FindFuelPos(pos);
 					int fn=RouteDis(pos,q)+5;
-					//printf("    [DEBUG]  fn=%d, fuel=%d\n",fn,fuel);
 					Supply(index,my_base->index,fuel-fn,0,metal);
 					a.type=a.COLLECT;
 					a.pos=q;
@@ -435,7 +453,7 @@ struct Scout : public AirForce
 
 };
 
-inline bool HasSig(const Unit& a,const UnitSignal& b){return a.sig.find(b)!=a.sig.end();}
+
 
 void update(){
 	TryUpdate();
@@ -538,7 +556,7 @@ void AIMain()
 	// ==========[MAIN AI PART BEGIN]==========
 	// 
 	// 
-	int j=my_base->fuel;
+	int j=my_base->fuel; // j: usable fuel
 	for(int i=0;i<INFO->production_num;++i){
 		j-=(kProperty[INFO->production_list[i].unit_type].fuel_max
 			-((INFO->production_list[i].unit_type==FIGHTER ||
@@ -554,7 +572,7 @@ void AIMain()
 			if(INFO->production_list[i].unit_type==CARGO)
 				++c;
 		}
-		while(c<INFO->round/5+1){
+		while(c<9){
 			Produce(CARGO);
 			++c;
 			j-=150;
@@ -564,17 +582,30 @@ void AIMain()
 		j/(kProperty[FIGHTER].fuel_max-1));++i){
 			Produce(FIGHTER);
 	}
-
+	{									// if fighter_with_no_job>13 then attack a given pos
+		unsigned fighter_with_no_job=0;
+		for(map<int,Unit*>::iterator i=Units.begin();i!=Units.end();++i){
+			Unit& obj=*(i->second);
+			if(obj.type==FIGHTER && obj.job.empty()){
+				++fighter_with_no_job;
+			}
+		}
+		if(fighter_with_no_job>MAX_FIGHTER_WAITING){
+			for(map<int,Unit*>::iterator i=Units.begin();i!=Units.end();++i){
+				Unit& obj=*(i->second);
+				if(obj.type==FIGHTER && obj.job.empty()){
+					Job a;
+					a.type=a.ATTACK;
+					a.target=enemy_base->index;
+					a.pos=obj.pos+(enemy_base->pos-my_base->pos);
+					obj.job.push(a);
+				}
+			}
+		}
+	}
 	for(map<int,Unit*>::iterator i=Units.begin();i!=Units.end();++i){
 		Unit& obj=*(i->second);
-		if(obj.type==FIGHTER && obj.job.empty()){
-			Job a;
-			a.type=a.ATTACK;
-			a.target=enemy_base->index;
-			a.pos=obj.pos+(enemy_base->pos-my_base->pos);
-			obj.job.push(a);
-		}
-		else if(obj.type==CARGO && obj.job.empty()){
+		if(obj.type==CARGO && obj.job.empty()){
 			obj.SimpleInit();
 		}
 	}
