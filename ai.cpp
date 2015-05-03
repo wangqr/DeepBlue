@@ -12,7 +12,7 @@
 #include<map>
 #include<set>
 
-#define AI_VERSION "wangqr_0.1-a2"
+#define AI_VERSION "v1.0"
 
 #define MAX_FIGHTER_WAITING 9
 
@@ -132,6 +132,10 @@ enum GlobalSignal
 set<GlobalSignal> GSig;
 inline void RaiseGsig(GlobalSignal a){GSig.insert(a);}
 inline void EraseGsig(GlobalSignal a){GSig.erase(a);}
+inline bool HasGSig(const GlobalSignal& a){
+	return GSig.find(a)!=GSig.end();
+}
+
 
 struct Unit : public State
 {
@@ -664,11 +668,16 @@ void AIMain()
 		unsigned fighter_with_no_job=0;
 		for(map<int,Unit*>::iterator i=Units.begin();i!=Units.end();++i){
 			Unit& obj=*(i->second);
-			if(obj.type==FIGHTER && obj.job.empty()){
+			if(obj.type==FIGHTER && obj.job.empty() && obj.last_seen==INFO->round){
 				++fighter_with_no_job;
 			}
 		}
-		if(fighter_with_no_job>=MAX_FIGHTER_WAITING){
+		int fighter_in_production_list=0;
+		for(int i=0;i<INFO->production_num;++i){
+			if(INFO->production_list[i].unit_type==FIGHTER && INFO->production_list[i].round_left<=1)
+				++fighter_in_production_list;
+		}
+		if(fighter_with_no_job>=MAX_FIGHTER_WAITING  && !HasGSig(BASE_UNDER_ATTACT) && fighter_in_production_list>=4){
 			for(map<int,Unit*>::iterator i=Units.begin();i!=Units.end();++i){
 				Unit& obj=*(i->second);
 				if(obj.type==FIGHTER && obj.job.empty()){
