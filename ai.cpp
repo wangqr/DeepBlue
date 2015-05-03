@@ -13,7 +13,7 @@
 #include<set>
 #include<algorithm>
 
-#define AI_VERSION "whatever_v2.0-rc1"
+#define AI_VERSION "whatever_v2.1-b1"
 
 using namespace teamstyle16;
 using std::vector;
@@ -198,8 +198,14 @@ inline int GetDamage(const State& source, const State& target){
 	int distance=Distance(source.pos,target.pos);
 	int fire_range = kProperty[source.type].fire_ranges[kProperty[target.type].level];
 	int modified_attacks[2];
-	modified_attacks[0] = int((1 - float(distance - fire_range / 2) / (fire_range + 1)) * kProperty[source.type].attacks[0]);
-	modified_attacks[1] = int((1 - float(distance - fire_range / 2) / (fire_range + 1)) * kProperty[source.type].attacks[1]);
+	if(source.type!=CARRIER){
+		modified_attacks[0] = int((1 - float(distance - fire_range / 2) / (fire_range + 1)) * kProperty[source.type].attacks[0]);
+		modified_attacks[1] = int((1 - float(distance - fire_range / 2) / (fire_range + 1)) * kProperty[source.type].attacks[1]);
+	}
+	else{
+		modified_attacks[0] = kProperty[source.type].attacks[0];
+		modified_attacks[1] = kProperty[source.type].attacks[1];
+	}
 	int fire_damage = max(0, modified_attacks[0] - kProperty[target.type].defences[0]);
 	int torpedo_damage = max(0, modified_attacks[1] - kProperty[target.type].defences[1]);
 	return fire_damage + torpedo_damage;
@@ -910,7 +916,7 @@ void AIMain()
 				j=0;
 			}
 		}
-		{
+		if(Distance(my_base->pos,enemy_base->pos)<=120){
 			unsigned c=0;
 			for(map<int,Unit*>::iterator i=Units.begin();i!=Units.end();++i){
 				if(i->second->team==my_team && i->second->type==SUBMARINE && i->second->job.empty())
